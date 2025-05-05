@@ -7,58 +7,69 @@ Original file is located at
     https://colab.research.google.com/drive/1EdSrJjaxQ8BLV0wIgrJ86ajCMRe4CeAr
 """
 
-# spotifyapp_popularity.py
+# --------------------------------------
+# 🎵 Spotify AI Recommender - Full App
+# --------------------------------------
+
+# 📦 Imports
 import streamlit as st
 import pandas as pd
 import numpy as np
 import json
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, accuracy_score, f1_score, roc_auc_score
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.metrics import classification_report, accuracy_score, f1_score, roc_auc_score, roc_curve
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
-from sklearn.decomposition import PCA
+from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# 🛠 Streamlit App Config
 st.set_page_config(page_title="🎵 Spotify AI Recommender", layout="wide")
 
+# --------------------------------------
+# 📅 Load Data
+# --------------------------------------
 @st.cache_data(show_spinner=True)
 def load_data():
     df = pd.read_csv("spotify_tracks.csv", low_memory=False)
     df = df.drop_duplicates(subset=['track_name', 'track_genre'], keep='first')
     audio_cols = ['danceability', 'energy', 'loudness', 'speechiness', 'acousticness',
-                  'instrumentalness', 'liveness', 'tempo', 'duration_ms', 'valence', 'popularity']
+                  'instrumentalness', 'liveness', 'tempo', 'duration_ms', 'valence']
     df[audio_cols] = df[audio_cols].fillna(df[audio_cols].mean()).astype(np.float32)
-
-    if 'language' in df.columns:
-        df['language'] = df['language'].fillna("unknown").str.strip().str.lower()
-
     return df, audio_cols
 
 spotify_df, model_features = load_data()
-
-st.sidebar.title("🔍 Navigation")
-page = st.sidebar.radio("Go to", ["EDA", "Model Evaluation", "Recommend Songs"])
+X_valence = spotify_df[model_features[:-1]]
+y_valence = (spotify_df['valence'] > 0.5).astype(int)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_valence)
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_valence, test_size=0.2, random_state=42)
 
 # --------------------------------------
-# 📊 1. EDA
+# 🔍 Sidebar Navigation
 # --------------------------------------
-if page == "EDA":
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", [
+    "EDA Dashboard", 
+    "Model Evaluation", 
+    "ML-Based Recommendation", 
+    "Cosine Similarity Recommendation"
+])
+
+# --------------------------------------
+# 📊 EDA Dashboard
+# --------------------------------------
+if page == "EDA Dashboard":
     st.title("📊 Spotify Dataset - EDA Dashboard")
-    st.write(f"**Total Records:** {spotify_df.shape[0]:,}")
+    st.write(f"*Total Records:* {spotify_df.shape[0]:,}")
     st.dataframe(spotify_df[model_features].describe(), use_container_width=True)
 
     st.subheader("🎧 Genre Distribution (Top 20)")
     st.bar_chart(spotify_df['track_genre'].value_counts().head(20))
-
-    if 'language' in spotify_df.columns:
-        st.subheader("🗣️ Language Distribution")
-        st.bar_chart(spotify_df['language'].value_counts().head(20))
 
     st.subheader("📈 Correlation Heatmap")
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -72,97 +83,168 @@ if page == "EDA":
     st.pyplot(fig2)
 
 # --------------------------------------
-# 🤖 2. Model Evaluation (Popularity)
+# 🧠 Model Evaluation
 # --------------------------------------
 elif page == "Model Evaluation":
-    st.title("🤖 Model Evaluation on Popularity Prediction")
-    X = spotify_df[model_features[:-2]]  # Exclude valence and popularity from features
-    y = (spotify_df['popularity'] > spotify_df['popularity'].median()).astype(int)
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
-
+    st.title("🧠 Model Evaluation - Predicting Valence")
     models = {
-        "KNN": KNeighborsClassifier(n_neighbors=7),
-        "Random Forest": RandomForestClassifier(n_estimators=200, max_depth=20),
         "Logistic Regression": LogisticRegression(max_iter=1000),
-        "SVM": SVC(C=2, kernel='rbf', probability=True),
+        "Random Forest": RandomForestClassifier(n_estimators=200),
+        "SVM": SVC(probability=True),
         "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss')
     }
 
-    stacking = StackingClassifier(
-        estimators=[(k, m) for k, m in models.items()],
-        final_estimator=LogisticRegression()
-    )
-    models["Stacking Ensemble"] = stacking
+    results = []
+    fig, ax = plt.subplots(figsize=(8, 6))
+    best_auc = 0
+    best_model = None
+    selected_model_name = ""
 
-    selected = st.multiselect("Select Models to Train", list(models.keys()), default=list(models.keys())[:3])
-
-    for name in selected:
-        model = models[name]
+    for name, model in models.items():
         model.fit(X_train, y_train)
-        preds = model.predict(X_test)
-        st.write(f"### 📌 {name} Performance")
-        st.text(classification_report(y_test, preds))
-        st.write(f"**Accuracy:** {accuracy_score(y_test, preds):.4f} | **F1-score:** {f1_score(y_test, preds):.4f} | **ROC AUC:** {roc_auc_score(y_test, model.predict_proba(X_test)[:,1]):.4f}")
+        y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)[:, 1]
+
+        acc = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred)
+        auc = roc_auc_score(y_test, y_prob)
+        results.append({"Model": name, "Accuracy": acc, "F1 Score": f1, "ROC AUC": auc})
+
+        st.markdown(f"### 📌 {name} Performance")
+        st.text(classification_report(y_test, y_pred))
+        st.markdown(f"*Accuracy:* {acc:.4f} | *F1 Score:* {f1:.4f} | *ROC AUC:* {auc:.4f}")
+
+        if auc > best_auc:
+            best_auc = auc
+            best_model = model
+            selected_model_name = name
+
+        fpr, tpr, _ = roc_curve(y_test, y_prob)
+        ax.plot(fpr, tpr, label=f"{name} (AUC = {auc:.2f})")
+
+    ax.plot([0, 1], [0, 1], linestyle='--', color='gray')
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("ROC Curve Comparison")
+    ax.legend()
+    st.pyplot(fig)
+
+    results_df = pd.DataFrame(results).sort_values("ROC AUC", ascending=False)
+    st.subheader("📊 Model Performance Summary")
+    st.dataframe(results_df.style.format({"Accuracy": "{:.4f}", "F1 Score": "{:.4f}", "ROC AUC": "{:.4f}"}))
+
+    st.success(f"✅ Best model selected for prediction: {selected_model_name}")
+    st.session_state.best_model = best_model
+    st.session_state.selected_model_name = selected_model_name
 
 # --------------------------------------
-# 🎵 3. Recommend Songs (No change)
+# 🎵 ML-Based Recommendation
 # --------------------------------------
-else:
-    st.title("🎵 Content-Based Song Recommendation")
-    uploaded_file = st.file_uploader("Upload your liked songs playlist (.json)", type="json")
+elif page == "ML-Based Recommendation":
+    st.title("🎵 ML-Based Mood Song Recommender")
+    st.markdown("Upload your playlist, get mood predictions, and filter by genre & mood.")
+
+    if "best_model" not in st.session_state:
+        st.warning("Please evaluate models first from the 'Model Evaluation' tab.")
+    else:
+        uploaded_file = st.file_uploader("📤 Upload your playlist JSON file", type="json")
+
+        if uploaded_file:
+            try:
+                user_data = json.load(uploaded_file)
+                user_df = pd.DataFrame(user_data)
+                user_df = user_df.dropna(subset=model_features[:-1])
+
+                valence_model = st.session_state.best_model
+                selected_model_name = st.session_state.selected_model_name
+                valence_model.fit(X_scaled, y_valence)
+
+                user_scaled = scaler.transform(user_df[model_features[:-1]])
+                predictions = valence_model.predict(user_scaled)
+
+                user_df['predicted_valence'] = predictions
+                user_df['mood'] = user_df['predicted_valence'].apply(lambda x: 'Happy' if x == 1 else 'Calm')
+
+                st.success(f"✅ Model used: {selected_model_name}")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    genre_options = sorted(user_df['track_genre'].dropna().unique())
+                    selected_genres = st.multiselect("🎼 Filter by Genre(s)", genre_options)
+                with col2:
+                    selected_mood = st.radio("🎭 Filter by Mood", ["All", "Happy", "Calm"])
+
+                top_n = st.slider("🔢 Select number of top songs to display", 3, 50, 10)
+
+                filtered_df = user_df.copy()
+                if selected_genres:
+                    filtered_df = filtered_df[filtered_df['track_genre'].isin(selected_genres)]
+                if selected_mood != "All":
+                    filtered_df = filtered_df[filtered_df['mood'] == selected_mood]
+
+                if filtered_df.empty:
+                    st.warning("No songs match the selected filters.")
+                else:
+                    top_songs = filtered_df.head(top_n)
+                    st.subheader(f"🎧 Top {top_n} Filtered Songs")
+                    st.dataframe(top_songs[['track_name', 'track_genre', 'valence', 'mood']], use_container_width=True)
+                    st.download_button("📥 Download Filtered Songs", data=top_songs.to_csv(index=False), file_name="filtered_songs.csv")
+
+            except Exception as e:
+                st.error(f"Error processing uploaded file: {e}")
+        else:
+            st.info("Please upload a JSON file with songs and their audio features.")
+
+# --------------------------------------
+# 🎧 Cosine Similarity Recommendation
+# --------------------------------------
+elif page == "Cosine Similarity Recommendation":
+    st.title("🎧 Content-Based Recommendation (Cosine Similarity)")
+    st.markdown("Upload your playlist to find similar tracks based on audio features.")
+
+    uploaded_file = st.file_uploader("📤 Upload your playlist JSON file", type="json")
 
     if uploaded_file:
-        playlist_data = json.load(uploaded_file)
-        user_df = pd.DataFrame(playlist_data)
+        try:
+            user_data = json.load(uploaded_file)
+            user_df = pd.DataFrame(user_data)
+            user_df = user_df.dropna(subset=model_features[:-1])
 
-        required_features = model_features[:-2]  # Exclude valence and popularity
-        missing_cols = [col for col in required_features if col not in user_df.columns]
-        if missing_cols:
-            st.error(f"The uploaded JSON is missing required feature columns: {missing_cols}")
-        else:
-            user_df = user_df.dropna(subset=required_features)
-            user_vector = user_df[required_features].mean().values.reshape(1, -1)
+            user_vectors = user_df[model_features[:-1]].values
+            spotify_vectors = spotify_df[model_features[:-1]].values
+            sim_matrix = cosine_similarity(user_vectors, spotify_vectors)
 
-            st.success("User profile vector computed ✅")
+            all_scores = sim_matrix.flatten()
+            scores_df = spotify_df.copy()
+            scores_df = pd.concat([scores_df] * len(user_df), ignore_index=True)
+            scores_df['similarity_score'] = all_scores
+            scores_df['mood'] = scores_df['valence'].apply(lambda x: 'Happy' if x > 0.5 else 'Calm')
 
-            filter_type = st.radio("Apply Filter", ["None", "By Genre", "By Mood"])
-            filtered_df = spotify_df.copy()
+            col1, col2 = st.columns(2)
+            with col1:
+                genre_options = sorted(scores_df['track_genre'].dropna().unique())
+                selected_genres = st.multiselect("🎼 Filter by Genre(s)", genre_options)
+            with col2:
+                selected_mood = st.radio("🎭 Filter by Mood", ["All", "Happy", "Calm"])
 
-            if filter_type == "By Genre":
-                genre = st.selectbox("Genre", sorted(spotify_df['track_genre'].dropna().unique()))
-                filtered_df = filtered_df[filtered_df['track_genre'].str.contains(genre, case=False)]
+            top_n = st.slider("🔢 Select number of top songs to display", 3, 50, 10)
 
-            elif filter_type == "By Mood":
-                mood = st.selectbox("Mood", ["Energetic + Happy", "Calm + Low Valence"])
-                if mood == "Energetic + Happy":
-                    filtered_df = filtered_df[(filtered_df['energy'] > 0.7) & (filtered_df['valence'] > 0.7)]
-                else:
-                    filtered_df = filtered_df[(filtered_df['energy'] < 0.4) & (filtered_df['valence'] < 0.4)]
+            filtered_df = scores_df.copy()
+            if selected_genres:
+                filtered_df = filtered_df[filtered_df['track_genre'].isin(selected_genres)]
+            if selected_mood != "All":
+                filtered_df = filtered_df[filtered_df['mood'] == selected_mood]
 
-            if not filtered_df.empty:
-                scaler_local = StandardScaler()
-                df_scaled = scaler_local.fit_transform(filtered_df[required_features])
-                user_scaled = scaler_local.transform(user_vector)
-                similarity = cosine_similarity(user_scaled, df_scaled).flatten()
-                filtered_df['similarity'] = similarity
+            final_recommendations = filtered_df.sort_values("similarity_score", ascending=False).head(top_n)
 
-                top_k = st.slider("Select number of songs", 5, 50, 10)
-                top_songs = filtered_df.sort_values("similarity", ascending=False).head(top_k)
-                st.dataframe(top_songs[['track_name', 'track_genre', 'similarity']])
+            if final_recommendations.empty:
+                st.warning("No songs match the selected filters.")
             else:
-                st.warning("No songs found for the selected filter.")
+                st.subheader(f"🎯 Top {top_n} Filtered Similar Songs")
+                st.dataframe(final_recommendations[['track_name', 'track_genre', 'valence', 'mood', 'similarity_score']], use_container_width=True)
+                st.download_button("📥 Download Recommendations", data=final_recommendations.to_csv(index=False), file_name="cosine_recommendations.csv")
 
-            if st.checkbox("Show PCA Visualization"):
-                pca = PCA(n_components=2)
-                reduced = pca.fit_transform(StandardScaler().fit_transform(spotify_df[required_features]))
-                pca_df = pd.DataFrame(reduced, columns=["PC1", "PC2"])
-                pca_df["Popular"] = (spotify_df['popularity'] > spotify_df['popularity'].median()).astype(int)
-                fig, ax = plt.subplots()
-                ax.scatter(pca_df["PC1"], pca_df["PC2"], c=pca_df["Popular"], cmap="coolwarm", alpha=0.6)
-                ax.set_title("PCA of Songs")
-                st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Error processing uploaded file: {e}")
     else:
-        st.info("👈 Upload a playlist JSON to get personalized song recommendations.")
+        st.info("Please upload a JSON file with songs and their audio features.")
