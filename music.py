@@ -7,11 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1EdSrJjaxQ8BLV0wIgrJ86ajCMRe4CeAr
 """
 
-# --------------------------------------
-# 🎵 Spotify AI Recommender - Full App
-# --------------------------------------
 
-# 📦 Imports
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -22,17 +18,15 @@ from sklearn.metrics import classification_report, accuracy_score, f1_score, roc
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
-from xgboost import XGBClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 🛠 Streamlit App Config
+# Streamlit Config
 st.set_page_config(page_title="🎵 Spotify AI Recommender", layout="wide")
 
-# --------------------------------------
-# 📅 Load Data
-# --------------------------------------
+# Load Data
 @st.cache_data(show_spinner=True)
 def load_data():
     df = pd.read_csv("spotify_tracks.csv", low_memory=False)
@@ -49,9 +43,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_valence)
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_valence, test_size=0.2, random_state=42)
 
-# --------------------------------------
-# 🔍 Sidebar Navigation
-# --------------------------------------
+# Sidebar
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", [
     "EDA Dashboard", 
@@ -88,11 +80,10 @@ if page == "EDA Dashboard":
 elif page == "Model Evaluation":
     st.title("🧠 Model Evaluation - Predicting Valence")
     models = {
-        "Logistic Regression": LogisticRegression(max_iter=1000),
-        "Random Forest": RandomForestClassifier(n_estimators=200),
-        "SVM": SVC(probability=True),
-        "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-    }
+    "Logistic Regression": LogisticRegression(max_iter=1000),
+    "Random Forest": RandomForestClassifier(n_estimators=200),
+    "KNN": KNeighborsClassifier(n_neighbors=7)
+}
 
     results = []
     fig, ax = plt.subplots(figsize=(8, 6))
